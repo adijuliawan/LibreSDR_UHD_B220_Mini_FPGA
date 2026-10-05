@@ -1,14 +1,8 @@
-# LibreSDR B210 FPGA — Vivado 2025.2 batch build script
+# LibreSDR B220 Mini FPGA — Vivado batch build script (2025.1 on Linux; also works with the Docker/2025.2 setup)
 #
-# Usage (inside Docker container):
-#   source /opt/Xilinx/2025.2/Vivado/settings64.sh
-#   cd /work
-#   vivado -mode batch -source /fpga/build.tcl
-#
-# Mount points expected:
-#   /fpga = LibreSDR_UHD_B220_Mini_FPGA/  (read-write, Vivado creates
-#           src/.runs/.gen/.cache alongside the .xpr)
-#   /work = output directory on external volume (reports + bitstream copied here)
+# Usage:
+#   source ~/Xilinx/2025.1/Vivado/settings64.sh
+#   vivado -mode batch -source build.tcl [-tclargs <output_dir>]      # default output: ./build_out
 #
 # NOTE: Uses in-process synth_design / opt_design / place_design / route_design
 # instead of launch_runs, because launch_runs spawns child processes that crash
@@ -35,9 +29,11 @@ set_msg_config -id {Synth 8-3917} -suppress
 set_msg_config -id {Synth 8-7071} -suppress
 set_msg_config -id {Synth 8-7023} -suppress
 
-set src_dir    /fpga/src
+set script_dir [file dirname [file normalize [info script]]]
+set src_dir    ${script_dir}/src
 set xpr_file   ${src_dir}/libresdr_b210.xpr
-set output_dir /work
+if {[llength $argv] > 0} { set output_dir [file normalize [lindex $argv 0]] } else { set output_dir ${script_dir}/build_out }
+file mkdir ${output_dir}
 
 # ---- Open project ----
 puts "Opening project: ${xpr_file}"
@@ -94,6 +90,22 @@ report_utilization    -file ${output_dir}/utilization.rpt
 report_drc            -file ${output_dir}/drc.rpt
 report_methodology    -file ${output_dir}/methodology.rpt
 report_power          -file ${output_dir}/power.rpt
+
+report_io             -file ${output_dir}/io.rpt
+report_clock_interaction -file ${output_dir}/clock_interaction.rpt
+check_timing          -file ${output_dir}/check_timing.rpt
+
+# GPIF registers must sit in IOBs (b210.xdc: IOB TRUE), as Ettus does for the B210 (LibreSDRB220 doc 13).
+set gpif_ff [get_cells -hier -filter {IS_SEQUENTIAL && NAME =~ "*gpif*"}]
+set in_iob 0
+set fh [open ${output_dir}/gpif_iob.txt w]
+foreach c $gpif_ff {
+    set site [get_sites -quiet -of_objects $c]
+    set st [expr {$site eq "" ? "-" : [get_property SITE_TYPE $site]}]
+    if {[string match "*LOGIC*" $st]} { incr in_iob; puts $fh "IOB    $st  $c" }
+}
+close $fh
+puts "GPIF registers placed in IOB sites: ${in_iob} (list in gpif_iob.txt)"
 
 puts "Reports written to ${output_dir}/"
 

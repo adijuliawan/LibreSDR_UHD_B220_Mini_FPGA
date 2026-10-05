@@ -32,3 +32,4 @@ baselines/
 
 # Upstream reference (embedded git repo)
 uhd/
+build_out/
