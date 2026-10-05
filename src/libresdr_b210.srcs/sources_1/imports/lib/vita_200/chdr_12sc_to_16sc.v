@@ -44,7 +44,7 @@ module chdr_12sc_to_16sc
    wire [28:0] 	       calc_output_len_2 = {just_samples_in,6'h0} + {just_samples_in,4'h0};
    wire [28:0] 	       calc_output_len_3 = {just_samples_in,2'h0} + {just_samples_in};
    wire [28:0] 	       calc_output_len_01 = calc_output_len_0 + calc_output_len_1;
-   wire [28:0] 	       calc_output_len_23 = calc_output_len_2 + calc_output_len_2;
+   wire [28:0] 	       calc_output_len_23 = calc_output_len_2 + calc_output_len_3;
    wire [28:0] 	       calc_output_len_0123 = calc_output_len_01 + calc_output_len_23;
    wire [28:0] 	       calc_output_len_tmp = calc_output_len_0123 +'b0001000000000000;
    wire [30:0] 	       calc_output_len = calc_output_len_tmp<<2;
