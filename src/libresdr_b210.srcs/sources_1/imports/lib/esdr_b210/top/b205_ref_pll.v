@@ -13,6 +13,7 @@ module b205_ref_pll(
     input force_fine,
     output [31:0] dac_now,
     output [31:0] phase_err_now,
+    output [63:0] status,    // loop state for user readback 2 (layout below)
     output reg lpps,
     output reg locked,
     output reg [4:0] dbg,
@@ -401,4 +402,15 @@ module b205_ref_pll(
         .sync_n(sync_n),
         .ready_out(ready_out)
     );
+
+    // dac_now (really freq_err) and phase_err_now stay 0 while no reference is detected: freq_err is held in
+    // reset and phase_err is only captured when R edges arrive. So they can't show whether the readback path
+    // works. This word can: with no reference, daco equals dac_def.
+    //   [15:0] daco (loop DAC word)   [31:16] dac_out (word sent to the 12-bit DAC, in [15:4])
+    //   [40:32] lock_counter          [48] locked  [49] ref_is_10M  [50] ref_is_pps  [51] ref_detected
+    //   [52] force_fine               [63:56] 8'hB2 layout tag
+    // Fields change at most once per PFD period (0.1 s at 10 MHz, 1 s at PPS), so the plain multi-bit
+    // synchronizer at the reader tears only if a read lands within a few ns of an update.
+    assign status = {8'hB2, 3'd0, force_fine, ref_detected, ref_is_pps, ref_is_10M, locked,
+                     7'd0, lock_counter, dac_out, daco};
 endmodule

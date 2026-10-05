@@ -309,12 +309,16 @@ end
     wire [31:0] dac_now;
     wire [31:0] phase_err_now;
     wire [63:0] rb8_buf;
+    wire [63:0] pll_status;
+    wire [63:0] rb16_buf;
     wire [31:0] rf0_user_w_8;
     wire rf0_user_w_8_stb;
     (* ASYNC_REG = "TRUE" *) reg  [63:0] rf0_user_rb_8 = 0;
+    reg  [63:0] rf0_user_rb_16 = 0;
     wire [31:0] rf1_user_w_8;
     wire rf1_user_w_8_stb;
     (* ASYNC_REG = "TRUE" *) reg  [63:0] rf1_user_rb_8 = 0;
+    reg  [63:0] rf1_user_rb_16 = 0;
     reg  tune_fine = 0;
     wire  tune_fine_buf;
 
@@ -331,6 +335,8 @@ end
         end
         rf0_user_rb_8 <= rb8_buf;
         rf1_user_rb_8 <= rb8_buf;
+        rf0_user_rb_16 <= rb16_buf;
+        rf1_user_rb_16 <= rb16_buf;
     end
 
     synchronizer #(.WIDTH(16), .STAGES(2), .INITIAL_VAL(DAC_DEF_POWERON), .FALSE_PATH_TO_IN(1))
@@ -351,6 +357,12 @@ end
         .in({phase_err_now, dac_now}), .out(rb8_buf)
     );
 
+    synchronizer #(.WIDTH(64), .STAGES(2), .INITIAL_VAL(0), .FALSE_PATH_TO_IN(1))
+    sync_pll_status (
+        .clk(radio_clk), .rst(radio_rst),
+        .in(pll_status), .out(rb16_buf)
+    );
+
 b205_ref_pll ref_pll_libresdr(
     .reset  (ref_pll_rst),
     .clk    (ref_pll_clk),      // 200 MHz sample clock
@@ -360,6 +372,7 @@ b205_ref_pll ref_pll_libresdr(
     .dac_def(dac_def_buf),
     .dac_now(dac_now),
     .phase_err_now(phase_err_now),
+    .status(pll_status),
     .lpps   (lpps),
     .locked (ext_ref_locked),
 
@@ -543,9 +556,11 @@ b205_ref_pll ref_pll_libresdr(
         .rf0_user_w_8(rf0_user_w_8),
         .rf0_user_w_8_stb(rf0_user_w_8_stb),
         .rf0_user_rb_8(rf0_user_rb_8),
+        .rf0_user_rb_16(rf0_user_rb_16),
         .rf1_user_w_8(rf1_user_w_8),
         .rf1_user_w_8_stb(rf1_user_w_8_stb),
-        .rf1_user_rb_8(rf1_user_rb_8)
+        .rf1_user_rb_8(rf1_user_rb_8),
+        .rf1_user_rb_16(rf1_user_rb_16)
 
     );
     

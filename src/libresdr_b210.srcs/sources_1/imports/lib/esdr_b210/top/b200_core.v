@@ -75,9 +75,11 @@ module b200_core
     output [31:0] rf0_user_w_8,
     output rf0_user_w_8_stb,
     input [63:0] rf0_user_rb_8,
+    input [63:0] rf0_user_rb_16,
     output [31:0] rf1_user_w_8,
     output rf1_user_w_8_stb,
-    input [63:0] rf1_user_rb_8
+    input [63:0] rf1_user_rb_8,
+    input [63:0] rf1_user_rb_16
 
 );
     localparam SR_CORE_SPI       = 8'd8;
@@ -87,7 +89,9 @@ module b200_core
     localparam SR_CORE_GPSDO_ST  = 8'd40;
     localparam SR_CORE_SYNC      = 8'd48;
     localparam COMPAT_MAJOR      = 16'h0010;
-    localparam COMPAT_MINOR      = 16'h0001;  // v16.1: all RTL audit fixes (CDC, COMBDLY, XDC, CASEINCOMPLETE, logic)
+    // Minor 1 = vladisslav2011 16.1 (RTL audit fixes). From 2 on, LibreSDRB220 phase1 builds: bump on every
+    // build so `uhd_usrp_probe` ("FPGA Version: 16.N") names the image. UHD checks only COMPAT_MAJOR.
+    localparam COMPAT_MINOR      = 16'h0002;
 
     (* ASYNC_REG = "TRUE" *) reg [1:0] lock_state;
     (* ASYNC_REG = "TRUE" *) reg [1:0] lock_state_r;
@@ -325,7 +329,7 @@ module b200_core
       .ctrl_tdata(r0_ctrl_tdata), .ctrl_tlast(r0_ctrl_tlast),  .ctrl_tvalid(r0_ctrl_tvalid), .ctrl_tready(r0_ctrl_tready),
       .resp_tdata(r0_resp_tdata), .resp_tlast(r0_resp_tlast),  .resp_tvalid(r0_resp_tvalid), .resp_tready(r0_resp_tready),
       .vita_time_b(), .debug(radio0_debug),
-      .user_w_8(rf0_user_w_8), .user_w_8_stb(rf0_user_w_8_stb), .user_rb_8(rf0_user_rb_8)
+      .user_w_8(rf0_user_w_8), .user_w_8_stb(rf0_user_w_8_stb), .user_rb_8(rf0_user_rb_8), .user_rb_16(rf0_user_rb_16)
    );
 
     /*******************************************************************
@@ -358,7 +362,7 @@ module b200_core
       .ctrl_tdata(r1_ctrl_tdata), .ctrl_tlast(r1_ctrl_tlast),  .ctrl_tvalid(r1_ctrl_tvalid), .ctrl_tready(r1_ctrl_tready),
       .resp_tdata(r1_resp_tdata), .resp_tlast(r1_resp_tlast),  .resp_tvalid(r1_resp_tvalid), .resp_tready(r1_resp_tready),
       .vita_time_b(), .debug(radio1_debug),
-      .user_w_8(rf1_user_w_8), .user_w_8_stb(rf1_user_w_8_stb), .user_rb_8(rf1_user_rb_8)
+      .user_w_8(rf1_user_w_8), .user_w_8_stb(rf1_user_w_8_stb), .user_rb_8(rf1_user_rb_8), .user_rb_16(rf1_user_rb_16)
    );
 `else
     assign radio_st = 8'h1;

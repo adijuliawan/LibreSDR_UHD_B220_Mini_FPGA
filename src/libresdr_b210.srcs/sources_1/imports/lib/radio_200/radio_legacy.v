@@ -34,6 +34,7 @@ module radio_legacy
    output reg [63:0] vita_time_b,
 
    input [63:0] user_rb_8,
+   input [63:0] user_rb_16,
    output [31:0] user_w_8,
    output user_w_8_stb,
 
@@ -226,6 +227,7 @@ generate
          case(rb_addr_user)
              8'd0 : rb_data_user = {user_reg_1_value, user_reg_0_value};
              8'd1 : rb_data_user = user_rb_8;
+             8'd2 : rb_data_user = user_rb_16;
              default : rb_data_user = 64'd0;
          endcase
       end
