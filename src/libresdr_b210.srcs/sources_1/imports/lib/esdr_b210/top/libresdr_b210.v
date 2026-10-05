@@ -297,8 +297,11 @@ end
     wire ref_pll_clk;
     wire [4:0] b205_pll_dbg;
 
-    reg [15:0] dac_def =
-        16'h7fff;  // default
+    // Power-on VCTCXO DAC word used while no reference is locked (runtime-writable via user reg 2).
+    // Board-specific: 16'hB080 puts unit P44SEGH within about +-30 ppb of nominal (GPSDO-measured 2026-10-05,
+    // pull ~0.27 ppb per step, 16'h7fff = -3.38 ppm). Recalibrate per board with LibreSDRB220/scripts/refpll_telemetry.py.
+    localparam [15:0] DAC_DEF_POWERON = 16'hB080;
+    reg [15:0] dac_def = DAC_DEF_POWERON;
 //        16'h8e90;  // sample 0
 //        16'ha8f0;  // sample 1
 //        16'h8e00;  // sample 2
@@ -330,7 +333,7 @@ end
         rf1_user_rb_8 <= rb8_buf;
     end
 
-    synchronizer #(.WIDTH(16), .STAGES(2), .INITIAL_VAL(16'h7fff), .FALSE_PATH_TO_IN(1))
+    synchronizer #(.WIDTH(16), .STAGES(2), .INITIAL_VAL(DAC_DEF_POWERON), .FALSE_PATH_TO_IN(1))
     sync_dac_def (
         .clk(ref_pll_clk), .rst(0),
         .in(dac_def), .out(dac_def_buf)
