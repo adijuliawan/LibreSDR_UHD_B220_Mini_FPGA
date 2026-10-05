@@ -277,3 +277,11 @@ set_property IOSTANDARD LVCMOS18 [get_ports scl]
 set_property IOSTANDARD LVCMOS18 [get_ports sda]
 
 set_false_path -from [get_clocks -of_objects [get_pins u_gen_clocks_main/inst/mmcm_adv_inst/CLKOUT1]] -to [get_clocks -of_objects [get_pins u_libresdr_b210_io/BUFR_inst/O]]
+
+# --- GPIF / FX3 interface (Phase 1, LibreSDRB220 doc 13) ---------------------------------------------
+# Ettus constrains the same RTL on the B210 with `INST "GPIF_*" IOB = TRUE` (fpga/usrp3/top/b200/timing.ucf):
+# every GPIF register sits in the I/O block, so interface timing is fixed by silicon and doesn't depend on
+# placement. The B220 port dropped this, which made each build's GPIF timing a placement lottery.
+set_property IOB TRUE [get_ports {GPIF_D[*] GPIF_CTL*}]
+# The FPGA forwards gpif_clk to the FX3 through ODDR_inst; name it so I/O timing shows up in the reports.
+create_generated_clock -name gpif_ifclk -source [get_pins ODDR_inst/C] -divide_by 1 [get_ports IFCLK]
