@@ -29,6 +29,9 @@ set_msg_config -id {Synth 8-3917} -suppress
 set_msg_config -id {Synth 8-7071} -suppress
 set_msg_config -id {Synth 8-7023} -suppress
 
+# The dev PC is a shared lab host: cap Vivado at 4 threads (run the build under `nice -n 19` too).
+set_param general.maxThreads 4
+
 set script_dir [file dirname [file normalize [info script]]]
 set src_dir    ${script_dir}/src
 set xpr_file   ${src_dir}/libresdr_b210.xpr
@@ -93,7 +96,30 @@ report_power          -file ${output_dir}/power.rpt
 
 report_io             -file ${output_dir}/io.rpt
 report_clock_interaction -file ${output_dir}/clock_interaction.rpt
-check_timing          -file ${output_dir}/check_timing.rpt
+check_timing -verbose -file ${output_dir}/check_timing.rpt
+write_checkpoint -force ${output_dir}/routed.dcp
+
+# AD9361 I/O timing (b210.xdc I/O delays; LibreSDRB220 doc 13). Worst setup and hold path for each direction.
+# GPIF is checked separately at the end (tools/gpif_timing_check.tcl, report-only).
+set fh [open ${output_dir}/io_timing.rpt w]; close $fh
+foreach {name ports} {
+    cat_rx  {CAT_P0_D[*] CAT_RX_FR_P}
+    cat_tx  {CAT_P1_D[*] CAT_TX_FR_P}
+} {
+    set p [get_ports $ports]
+    set dir [expr {$name eq "cat_rx" ? "-from" : "-to"}]
+    foreach d {max min} {
+        set path [get_timing_paths $dir $p -delay_type $d -max_paths 1 -nworst 1]
+        set s [expr {[llength $path] ? [get_property SLACK $path] : "unconstrained"}]
+        puts "I/O timing ${name} [expr {$d eq "max" ? "setup" : "hold"}]: ${s}"
+        report_timing $dir $p -delay_type $d -max_paths 1 -input_pins -append -file ${output_dir}/io_timing.rpt
+    }
+}
+# Ports still without a delay or exception. Expected: only the GPIF bus (34 in, 38 out), see the GPIF check below.
+foreach chk {no_input_delay no_output_delay} {
+    set f [open ${output_dir}/check_timing.rpt]; set txt [read $f]; close $f
+    if {[regexp "checking ${chk} \\((\\d+)\\)" $txt -> n]} { puts "check_timing ${chk}: ${n}" }
+}
 
 # GPIF registers must sit in IOBs (b210.xdc: IOB TRUE), as Ettus does for the B210 (LibreSDRB220 doc 13).
 set gpif_ff [get_cells -hier -filter {IS_SEQUENTIAL && NAME =~ "*gpif*"}]
@@ -123,6 +149,9 @@ if {$whs < 0} {
 # ---- Bitstream ----
 puts "Generating bitstream..."
 write_bitstream -force -bin_file ${output_dir}/libresdr_b210
+
+# Report-only: GPIF against FX3 datasheet worst case. Adds I/O delays to the in-memory design after the bitstream.
+source ${script_dir}/tools/gpif_timing_check.tcl
 
 puts ""
 puts "========================================="
