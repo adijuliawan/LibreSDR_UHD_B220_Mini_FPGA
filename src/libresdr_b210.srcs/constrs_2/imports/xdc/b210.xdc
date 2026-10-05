@@ -167,7 +167,9 @@ set_property -dict {PACKAGE_PIN D21 IOSTANDARD LVCMOS33} [get_ports SRX2_RX]
 set_property -dict {PACKAGE_PIN E22 IOSTANDARD LVCMOS33} [get_ports SRX2_TX]
 set_property -dict {PACKAGE_PIN A16 IOSTANDARD LVCMOS33} [get_ports tx_enable1]
 set_property -dict {PACKAGE_PIN G22 IOSTANDARD LVCMOS33} [get_ports tx_enable2]
-create_clock -period 12.500 [get_ports CAT_DCLK_P]
+# AD9361 DATA_CLK. Max 61.44 MHz: DATA_CLK = master clock in 1R1T, 2x master clock (<= 30.72 MHz) in 2R2T.
+# Same period as Ettus B200 timing.ucf and AD9361 tCP min (UG-570 Table 49). Was 12.500 (80 MHz).
+create_clock -period 16.276 -name CAT_DCLK_P [get_ports CAT_DCLK_P]
 #create_clock -period 16.000 -name radio_clk [get_nets radio_clk]
 
 
@@ -285,3 +287,58 @@ set_false_path -from [get_clocks -of_objects [get_pins u_gen_clocks_main/inst/mm
 set_property IOB TRUE [get_ports {GPIF_D[*] GPIF_CTL*}]
 # The FPGA forwards gpif_clk to the FX3 through ODDR_inst; name it so I/O timing shows up in the reports.
 create_generated_clock -name gpif_ifclk -source [get_pins ODDR_inst/C] -divide_by 1 [get_ports IFCLK]
+
+# --- AD9361 data port, CMOS DDR 1.8 V (Phase 1, LibreSDRB220 doc 13) -----------------------------------
+# UHD sees this board as a B210 (product 2) and programs the AD9361 interface with rx_data_delay = tx_data_delay
+# = 0xF and both clock delays 0 (b200_impl.cpp, b200_ad9361_client_t::get_digital_interface_timing). AD9361 delay
+# steps are about 0.3 ns/LSB (typical only, no min/max given), so 0xF is about 4.5 ns; we allow +-1 ns around it.
+# Chip timing (AD9361 datasheet CMOS 1.8 V table, UG-570 Table 49): tDDRX 0..1.5 ns (DATA_CLK -> Rx data),
+# tDDDV 0..1.0 ns (DATA_CLK -> RX_FRAME), tSTX 1 ns / tHTX 0 ns (Tx data vs FB_CLK), tMP 45..55 % of tCP.
+# Capture scheme (libresdr_b205_io.v): RX data/frame go straight into IDDR (SAME_EDGE) on the BUFR copy of DATA_CLK;
+# TX data/frame and FB_CLK come from ODDRs on the same clock, so TX is edge-aligned with FB_CLK.
+# In both directions each word is captured by the clock edge after the one that launched it (T/2 later): setup is
+# checked rise->fall and fall->rise, hold rise->rise and fall->fall; the other edge pairs are false paths.
+set cat_t     16.276
+set cat_dcd   [expr {0.05 * $cat_t}]
+set cat_dly   4.5
+set cat_dtol  1.0
+set cat_brd   0.1
+
+# RX: data and frame change cat_dly + [0, tDDRX] after each DATA_CLK edge at the pins.
+create_clock -period $cat_t -name cat_dclk_virt
+set cat_rx [get_ports {CAT_P0_D[*] CAT_RX_FR_P}]
+set_input_delay -clock cat_dclk_virt -max [expr {$cat_dly + $cat_dtol + 1.5 + $cat_dcd + $cat_brd}] $cat_rx
+set_input_delay -clock cat_dclk_virt -min [expr {$cat_dly - $cat_dtol - $cat_brd}] $cat_rx
+set_input_delay -clock cat_dclk_virt -max [expr {$cat_dly + $cat_dtol + 1.5 + $cat_dcd + $cat_brd}] $cat_rx -clock_fall -add_delay
+set_input_delay -clock cat_dclk_virt -min [expr {$cat_dly - $cat_dtol - $cat_brd}] $cat_rx -clock_fall -add_delay
+set_false_path -setup -rise_from [get_clocks cat_dclk_virt] -rise_to [get_clocks CAT_DCLK_P]
+set_false_path -setup -fall_from [get_clocks cat_dclk_virt] -fall_to [get_clocks CAT_DCLK_P]
+set_false_path -hold  -rise_from [get_clocks cat_dclk_virt] -fall_to [get_clocks CAT_DCLK_P]
+set_false_path -hold  -fall_from [get_clocks cat_dclk_virt] -rise_to [get_clocks CAT_DCLK_P]
+
+# TX: the AD9361 delays Tx data by cat_dly inside the chip, so at its pins it needs data from tSTX + cat_dly
+# before to tHTX - cat_dly after (i.e. cat_dly before) the capturing FB_CLK edge.
+create_generated_clock -name cat_fbclk -source [get_pins u_libresdr_b210_io/oddr_clk/C] -divide_by 1 [get_ports CAT_FBCLK_P]
+set cat_tx [get_ports {CAT_P1_D[*] CAT_TX_FR_P}]
+set_output_delay -clock cat_fbclk -max [expr {1.0 + $cat_dly + $cat_dtol + $cat_dcd + $cat_brd}] $cat_tx
+set_output_delay -clock cat_fbclk -min [expr {$cat_dly - $cat_dtol - $cat_brd}] $cat_tx
+set_output_delay -clock cat_fbclk -max [expr {1.0 + $cat_dly + $cat_dtol + $cat_dcd + $cat_brd}] $cat_tx -clock_fall -add_delay
+set_output_delay -clock cat_fbclk -min [expr {$cat_dly - $cat_dtol - $cat_brd}] $cat_tx -clock_fall -add_delay
+set_false_path -setup -rise_from [get_clocks CAT_DCLK_P] -rise_to [get_clocks cat_fbclk]
+set_false_path -setup -fall_from [get_clocks CAT_DCLK_P] -fall_to [get_clocks cat_fbclk]
+set_false_path -hold  -rise_from [get_clocks CAT_DCLK_P] -fall_to [get_clocks cat_fbclk]
+set_false_path -hold  -fall_from [get_clocks CAT_DCLK_P] -rise_to [get_clocks cat_fbclk]
+
+# AD9361 control pins: tied to constants (CTL_IN, EN, EN_AGC, TXnRX, SYNC), a slow reset, async lock status into a
+# synchronizer (CTL_OUT), and SPI. SPI is bit-banged from bus_clk registers at a divided rate (simple_spi_core), so
+# every SPI edge is many bus_clk cycles apart. None of these is timed against a clock.
+set_false_path -to   [get_ports {CAT_CTL_IN[*] CAT_EN CAT_EN_AGC CAT_TXnRX CAT_SYNC CAT_RESETn CAT_SPI_CLK CAT_SPI_DI CAT_SPI_EN}]
+set_false_path -from [get_ports {CAT_CTL_OUT[*] CAT_SPI_DO}]
+
+# --- Slow or static board I/O -------------------------------------------------------------------------------
+# LEDs, RF switch and PA enables (radio_clk ATR, settle in us), VCTCXO DAC SPI (ref_pll_clk, auto-SPI), front-panel
+# GPIO and UART, EEPROM I2C, reference status, the FX3 serial settings bus (GPIF_CTL6/8), FX3 reset (GPIF_CTL9)
+# and FX3_EXTINT. Ettus leaves these unconstrained on the B210 too; the false paths make check_timing list only
+# what is really left.
+set_false_path -to [get_ports {LED_* SFDX* SRX* tx_enable* CLK_40M_DAC_* REF_CLK_REQ REF_IS_10M_detect_inv REF_LOCKED_inv PPS_LED_inv fp_gpio[*] FPGA_RXD0 FPGA_TXD0 scl sda}]
+set_false_path -from [get_ports {fp_gpio[*] FPGA_RXD0 FPGA_TXD0 sda GPIF_CTL6 GPIF_CTL8 GPIF_CTL9 FX3_EXTINT}]
