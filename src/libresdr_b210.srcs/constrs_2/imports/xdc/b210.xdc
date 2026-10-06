@@ -78,7 +78,10 @@ set_property -dict {PACKAGE_PIN K4 IOSTANDARD LVCMOS18 SLEW SLOW} [get_ports {GP
 set_property -dict {PACKAGE_PIN N2 IOSTANDARD LVCMOS18 SLEW SLOW} [get_ports {GPIF_D[29]}]
 set_property -dict {PACKAGE_PIN P1 IOSTANDARD LVCMOS18 SLEW SLOW} [get_ports {GPIF_D[30]}]
 set_property -dict {PACKAGE_PIN K3 IOSTANDARD LVCMOS18 SLEW SLOW} [get_ports {GPIF_D[31]}]
-set_property -dict {PACKAGE_PIN K1 IOSTANDARD LVCMOS18 SLEW SLOW} [get_ports IFCLK]
+# IFCLK (FX3 PCLK) with fast slew: the forwarded clock then reaches the FX3 about 1 ns earlier relative to the slow-slew
+# GPIF data, which the round trip needs against the FX3 worst case (tools/gpif_timing_check.tcl; LibreSDRB220 doc 13).
+# Ettus uses DRIVE 8 SLEW SLOW on the B210. Drive stays at the LVCMOS18 default (12 mA).
+set_property -dict {PACKAGE_PIN K1 IOSTANDARD LVCMOS18 SLEW FAST} [get_ports IFCLK]
 set_property -dict {PACKAGE_PIN G1 IOSTANDARD LVCMOS18 SLEW SLOW} [get_ports GPIF_CTL0]
 set_property -dict {PACKAGE_PIN J1 IOSTANDARD LVCMOS18 SLEW SLOW} [get_ports GPIF_CTL1]
 set_property -dict {PACKAGE_PIN J6 IOSTANDARD LVCMOS18 SLEW SLOW} [get_ports GPIF_CTL2]
