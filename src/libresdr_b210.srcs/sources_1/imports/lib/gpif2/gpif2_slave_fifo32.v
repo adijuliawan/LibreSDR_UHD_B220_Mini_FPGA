@@ -31,12 +31,12 @@ module gpif2_slave_fifo32
     input gpif_enb,
     inout [31:0] gpif_d,
     input [1:0] gpif_ctl,
-    output reg sloe,
-    output reg slrd,
+    output sloe,
+    output slrd,
     output reg slwr,
     output slcs,
     output reg pktend,
-    output reg [1:0] fifoadr,
+    output [1:0] fifoadr,
     // FIFO interfaces
     input fifo_clk,
     input fifo_rst,
@@ -56,6 +56,27 @@ module gpif2_slave_fifo32
 
 
     assign slcs = 1'b0;
+
+    //
+    // FX3 control outputs and the data-bus tristate come from dedicated flops packed into the I/O blocks
+    // (LibreSDRB220 doc 13, build 16.8), so their pin timing doesn't depend on placement. The *_q registers
+    // carry the same values for the internal logic. Every assignment goes through the SET_* macros below,
+    // which write both copies on the same clock edge. Power-up values match the original registers (0), and
+    // gpif_t = ~sloe, so the FPGA starts tristated, as before.
+    //
+    reg        sloe_q, slrd_q;
+    reg [1:0]  fifoadr_q;
+    (* IOB = "TRUE" *) reg        gpif_sloe_pin;
+    (* IOB = "TRUE" *) reg        gpif_slrd_pin;
+    (* IOB = "TRUE" *) reg [1:0]  gpif_fifoadr_pin;
+    (* IOB = "TRUE" *) reg [31:0] gpif_t = 32'hFFFF_FFFF;   // OBUFT T per data pin, 1 = high-Z
+    assign sloe    = gpif_sloe_pin;
+    assign slrd    = gpif_slrd_pin;
+    assign fifoadr = gpif_fifoadr_pin;
+// gpif_t uses ! (not ~) so it stays one bit wide when the argument is an unsized 1.
+`define SET_SLOE(v)    begin sloe_q <= (v); gpif_sloe_pin <= (v); gpif_t <= {32{!(v)}}; end
+`define SET_SLRD(v)    begin slrd_q <= (v); gpif_slrd_pin <= (v); end
+`define SET_FIFOADR(v) begin fifoadr_q <= (v); gpif_fifoadr_pin <= (v); end
 
     //
     // DMA FIFO ready and watermark flags
@@ -82,7 +103,10 @@ module gpif2_slave_fifo32
 	// Hold values until we know if they are end of packets for single beat reads.
     gpif_data_in <= gpif_d;
 
-    assign gpif_d = sloe ? gpif_data_out[31:0] : 32'bz;
+    genvar gi;
+    generate for (gi = 0; gi < 32; gi = gi + 1) begin : gpif_d_tristate
+      assign gpif_d[gi] = gpif_t[gi] ? 1'bz : gpif_data_out[gi];
+    end endgenerate
 
    // ////////////////////////////////////////////////////////////////////
    // GPIF bus master state machine
@@ -122,7 +146,7 @@ module gpif2_slave_fifo32
         slrd4 <= 1'b1;
         slrd5 <= 1'b1;
      end else begin
-        slrd1 <= slrd;
+        slrd1 <= slrd_q;
         slrd2 <= slrd1;
         slrd3 <= slrd2;
         slrd4 <= slrd3;
@@ -153,13 +177,13 @@ module gpif2_slave_fifo32
     always @(posedge gpif_clk)
     if(gpif_rst) begin
         state <= STATE_IDLE;
-        sloe <= 1;
-        slrd <= 1;
+        `SET_SLOE(1)
+        `SET_SLRD(1)
         slwr <= 1;
         pktend <= 1;
         gpif_data_out <= 32'b0;
         idle_cycles <= 3'h0;
-        fifoadr <= 0;
+        `SET_FIFOADR(0)
         first_read <= 1'b0;
         //last_addr <= 2'b0;
         rx_eop <= 1'b0;
@@ -174,12 +198,12 @@ module gpif2_slave_fifo32
       // Increment fifoadr to point at next thread, set all strobes to idle,
       //
         STATE_IDLE: begin
-          sloe <= 1;
-          slrd <= 1;
+          `SET_SLOE(1)
+          `SET_SLRD(1)
           slwr <= 1;
           pktend <= 1;
           gpif_data_out <= 32'b0;
-          fifoadr <= next_addr;
+          `SET_FIFOADR(next_addr)
           state <= STATE_WAIT;
           idle_cycles <= 3'h0;
        	  rx_eop <= 1'b0;
@@ -203,7 +227,7 @@ module gpif2_slave_fifo32
           else begin
             idle_cycles <= 3'b0;
             //fifoadr <= fifoadr + 2'b1;
-            fifoadr <= next_addr;
+            `SET_FIFOADR(next_addr)
 
           end
         end
@@ -216,14 +240,14 @@ module gpif2_slave_fifo32
         // write_ready_go are mutually exclusive by design.
           if (fx3_ready1 && fx3_wmark1 && read_ready_go) begin
             state <= STATE_READ;
-            slrd <= 0;
+            `SET_SLRD(0)
             rx_eop <= 1'b0;
             first_read <= 1'b1; // Set unconditional read flag to kick off transaction
-            sloe <= 0; // FX3 drives the data bus.
+            `SET_SLOE(0) // FX3 drives the data bus.
           end else if (fx3_ready1 && ~fx3_wmark1 && read_ready_go) begin
             state <= STATE_READ_SINGLE;
-            slrd <= 0;
-            sloe <= 0; // FX3 drives the data bus.
+            `SET_SLRD(0)
+            `SET_SLOE(0) // FX3 drives the data bus.
           end else if (fx3_ready1 && write_ready_go && wr_fifo_eop && (transfer_size[7:0] == 0)) begin // remember that write_ready_go shows 1 cycle old status.
             // If an exact multiple of the native USB packet size (1K USB3, 512B USB2) has been transfered
             // and TLAST is asserted (but the transfer is less than a full FX3 DMA buffer - this is
@@ -268,17 +292,17 @@ module gpif2_slave_fifo32
       STATE_READ_SINGLE: begin
         if (idle_cycles == 0) begin
     	// Deassert read strobe after reading single 32bit word
-          slrd <= 1'b1;
+          `SET_SLRD(1'b1)
           idle_cycles <= idle_cycles + 1;
 	      end else if (idle_cycles == 5) begin
 		// READY1 flag now reflect effects of last read.
         if (!fx3_ready1) begin
            state <= STATE_IDLE;
-           sloe <= 1'b1;
+           `SET_SLOE(1'b1)
         end else begin
         // Initiate another READ beat.
            state <= STATE_READ_SINGLE;
-           slrd <= 1'b0;
+           `SET_SLRD(1'b0)
         end
         idle_cycles <= 0;
         end else begin
@@ -297,10 +321,10 @@ module gpif2_slave_fifo32
 
         if (~fx3_wmark1 | fifo_nearly_full) begin
           // Either end of packet or local FIFO full is imminent, start shutting down this read burst.
-          slrd <= 1'b1;  // Active low - Take read strobe inactive
+          `SET_SLRD(1'b1)  // Active low - Take read strobe inactive
           state <= STATE_READ_FLUSH;
         end else begin
-           slrd <= 1'b0; // Active low - Keep read strobe active.
+           `SET_SLRD(1'b0) // Active low - Keep read strobe active.
         end
 
         if (~fx3_wmark1)
@@ -314,7 +338,7 @@ module gpif2_slave_fifo32
 
       // SLRD has been deasserted but data continues to flow from FX3 into FPGA until pipeline empties.
       STATE_READ_FLUSH: begin
-        slrd <= 1'b1; // Active low - Keep read strobe inactive.
+        `SET_SLRD(1'b1) // Active low - Keep read strobe inactive.
         rx_eop <= 1'b0; // EOP indication can be reset now - Already traveling in the pipeline if it was active.
         if (~slrd3)
           // Reset first_read flag as slrd assertion progresses down pipeline
@@ -322,7 +346,7 @@ module gpif2_slave_fifo32
         if (!first_read && slrd3) begin // Active low signal
           // Last data of burst will be written to FIFO next clock edge so transition to IDLE also.
           state <= STATE_IDLE;
-          sloe <= 1'b1; // Active low - Resume parking bus with FPGA driving.
+          `SET_SLOE(1'b1) // Active low - Resume parking bus with FPGA driving.
         end
       end
 
@@ -374,7 +398,7 @@ module gpif2_slave_fifo32
 
       // Some FX3 timing diagrams seem to imply address should be held stable after transaction
       STATE_WRITE_FLUSH: begin
-        slrd <= 1;
+        `SET_SLRD(1)
         slwr <= 1;
         pktend <= 1;
         gpif_data_out <= 32'b0;
@@ -411,50 +435,50 @@ module gpif2_slave_fifo32
    //always @(posedge gpif_clk) next_addr <= (fifoadr + 2'b1);
 
    // Sequence addresses 0->2->1->3->0......
-   always @(posedge gpif_clk) {next_addr[0],next_addr[1]} <= ({fifoadr[0],fifoadr[1]} + 2'b1);
+   always @(posedge gpif_clk) {next_addr[0],next_addr[1]} <= ({fifoadr_q[0],fifoadr_q[1]} + 2'b1);
 
     //Help the FPGA search to only look for addrs that the FPGA is ready for
     assign local_fifo_ready =
-        (ctrl_rx_tvalid && (fifoadr == ADDR_CTRL_RX)) ||
-        (ctrl_tx_fifo_has_space && (fifoadr == ADDR_CTRL_TX)) ||
-        (data_rx_tvalid && (fifoadr == ADDR_DATA_RX)) ||
-        (data_tx_fifo_has_space && (fifoadr == ADDR_DATA_TX));
+        (ctrl_rx_tvalid && (fifoadr_q == ADDR_CTRL_RX)) ||
+        (ctrl_tx_fifo_has_space && (fifoadr_q == ADDR_CTRL_TX)) ||
+        (data_rx_tvalid && (fifoadr_q == ADDR_DATA_RX)) ||
+        (data_tx_fifo_has_space && (fifoadr_q == ADDR_DATA_TX));
 
     // Local TX FIFO imminantly about to fill.
     always @(posedge gpif_clk) fifo_nearly_full <=
-        (ctrl_tx_fifo_nearly_full && (fifoadr == ADDR_CTRL_TX)) ||
-        (data_tx_fifo_nearly_full && (fifoadr == ADDR_DATA_TX));
+        (ctrl_tx_fifo_nearly_full && (fifoadr_q == ADDR_CTRL_TX)) ||
+        (data_tx_fifo_nearly_full && (fifoadr_q == ADDR_DATA_TX));
 
     // There is enough space in local FIFO to RX an entire CHDR packet (sized for channel type)
     always @(posedge gpif_clk) read_ready_go <=
-        (ctrl_tx_fifo_has_space && (fifoadr == ADDR_CTRL_TX)) ||
-        (data_tx_fifo_has_space && (fifoadr == ADDR_DATA_TX));
+        (ctrl_tx_fifo_has_space && (fifoadr_q == ADDR_CTRL_TX)) ||
+        (data_tx_fifo_has_space && (fifoadr_q == ADDR_DATA_TX));
 
     // The is data waiting to be sent to FX3 in local FIFO's
     always @(posedge gpif_clk) write_ready_go <=
-        (ctrl_rx_tvalid && (fifoadr == ADDR_CTRL_RX)) ||
-        (data_rx_tvalid && (fifoadr == ADDR_DATA_RX));
+        (ctrl_rx_tvalid && (fifoadr_q == ADDR_CTRL_RX)) ||
+        (data_rx_tvalid && (fifoadr_q == ADDR_DATA_RX));
 
     //fifo xfer enable
     wire data_rx_tready = (
                ((state == STATE_WRITE) && fx3_wmark1 && ~pad) || // Sustain burst
                ((state == STATE_THINK) && fx3_ready1)    // First beat
-               ) && (fifoadr == ADDR_DATA_RX) ;
+               ) && (fifoadr_q == ADDR_DATA_RX) ;
 
     wire ctrl_rx_tready = (
                ((state == STATE_WRITE) && fx3_wmark1) || // Sustain burst
                ((state == STATE_THINK) && fx3_ready1)    // First beat
-               ) && (fifoadr == ADDR_CTRL_RX) ;
+               ) && (fifoadr_q == ADDR_CTRL_RX) ;
 
     // Burst reads tap the read strobe pipeline at stage3, single beat reads at stage5.
     wire data_tx_tvalid = (
                (((state == STATE_READ) || (state == STATE_READ_FLUSH)) && ~slrd3) |
                ((state == STATE_READ_SINGLE) && ~slrd5)
-               ) && (fifoadr == ADDR_DATA_TX);
+               ) && (fifoadr_q == ADDR_DATA_TX);
     wire ctrl_tx_tvalid = (
                (((state == STATE_READ) || (state == STATE_READ_FLUSH)) && ~slrd3) |
                ((state == STATE_READ_SINGLE) && ~slrd5)
-               ) && (fifoadr == ADDR_CTRL_TX);
+               ) && (fifoadr_q == ADDR_CTRL_TX);
 
     // The position of RX TLAST is known well in advance for bursts by monitoring the watermark. However for
     // single beat reads it can only be deduced after a read that causes the ready flag to go inactive.
@@ -466,11 +490,11 @@ module gpif2_slave_fifo32
     wire [31:0] ctrl_rx_tdata, data_rx_tdata;
 
     // There will be a RX FIFO transaction this cycle
-    assign wr_fifo_xfer = (fifoadr == ADDR_CTRL_RX)? (ctrl_rx_tvalid && ctrl_rx_tready) : (data_rx_tvalid && data_rx_tready);
+    assign wr_fifo_xfer = (fifoadr_q == ADDR_CTRL_RX)? (ctrl_rx_tvalid && ctrl_rx_tready) : (data_rx_tvalid && data_rx_tready);
     // The RX FIFO transaction this cycle has TLAST set
-    assign wr_fifo_eop =  (fifoadr == ADDR_CTRL_RX)? ctrl_rx_tlast : data_rx_tlast;
+    assign wr_fifo_eop =  (fifoadr_q == ADDR_CTRL_RX)? ctrl_rx_tlast : data_rx_tlast;
     // Route data from addressed RX FIFO towards FX3
-    assign wr_fifo_data = (fifoadr == ADDR_CTRL_RX)? ctrl_rx_tdata : data_rx_tdata;
+    assign wr_fifo_data = (fifoadr_q == ADDR_CTRL_RX)? ctrl_rx_tdata : data_rx_tdata;
 
     wire ctrl_bus_error, tx_bus_error;
 
@@ -585,5 +609,9 @@ module gpif2_slave_fifo32
       );
  -----/\----- EXCLUDED -----/\----- */
 
+
+`undef SET_SLOE
+`undef SET_SLRD
+`undef SET_FIFOADR
 
 endmodule // gpif2_slave_fifo32

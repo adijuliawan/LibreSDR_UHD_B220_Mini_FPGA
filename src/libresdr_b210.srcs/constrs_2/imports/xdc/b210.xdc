@@ -287,7 +287,9 @@ set_false_path -from [get_clocks -of_objects [get_pins u_gen_clocks_main/inst/mm
 # Ettus constrains the same RTL on the B210 with `INST "GPIF_*" IOB = TRUE` (fpga/usrp3/top/b200/timing.ucf):
 # every GPIF register sits in the I/O block, so interface timing is fixed by silicon and doesn't depend on
 # placement. The B220 port dropped this, which made each build's GPIF timing a placement lottery.
-set_property IOB TRUE [get_ports {GPIF_D[*] GPIF_CTL*}]
+# Only ports driven or sampled by a flop: CTL0 (SLCS#) is a constant, CTL6/8/9 (FX3 serial bus, reset) feed logic.
+# From 16.8 SLOE#, SLRD#, FIFOADR and the GPIF_D tristate also come from pin flops (gpif2_slave_fifo32.v).
+set_property IOB TRUE [get_ports {GPIF_D[*] GPIF_CTL1 GPIF_CTL2 GPIF_CTL3 GPIF_CTL4 GPIF_CTL5 GPIF_CTL7 GPIF_CTL11 GPIF_CTL12}]
 # The FPGA forwards gpif_clk to the FX3 through ODDR_inst; name it so I/O timing shows up in the reports.
 create_generated_clock -name gpif_ifclk -source [get_pins ODDR_inst/C] -divide_by 1 [get_ports IFCLK]
 

@@ -132,6 +132,10 @@ foreach c $gpif_ff {
 }
 close $fh
 puts "GPIF registers placed in IOB sites: ${in_iob} (list in gpif_iob.txt)"
+# Power-up values of the 16.8 pin flops (xsim can't check these): FPGA starts tristated like the 16.7 logic.
+set t_init [lsort -unique [get_property INIT [get_cells -quiet -hier -filter {NAME =~ "*gpif_t_reg*"}]]]
+set p_init [lsort -unique [get_property INIT [get_cells -quiet -hier -filter {NAME =~ "*gpif_sloe_pin_reg*" || NAME =~ "*gpif_slrd_pin_reg*" || NAME =~ "*gpif_fifoadr_pin_reg*"}]]]
+puts "GPIF pin-flop INIT: gpif_t {$t_init} (expect 1'b1), sloe/slrd/fifoadr pins {$p_init} (expect 1'b0)"
 
 puts "Reports written to ${output_dir}/"
 
