@@ -61,15 +61,16 @@ module gpif2_slave_fifo32
     // FX3 control outputs and the data-bus tristate come from dedicated flops packed into the I/O blocks
     // (LibreSDRB220 doc 13, build 16.8), so their pin timing doesn't depend on placement. The *_q registers
     // carry the same values for the internal logic. Every assignment goes through the SET_* macros below,
-    // which write both copies on the same clock edge. Power-up values match the original registers (0), and
-    // gpif_t = ~sloe, so the FPGA starts tristated, as before.
+    // which write both copies on the same clock edge. Power-up values are the reset values, which is what
+    // Vivado gave the 16.7 registers (sloe 1, slrd 1, fifoadr 0), so the FPGA drives the parked bus from
+    // configuration on, as before (gpif_t = ~sloe = 0).
     //
-    reg        sloe_q, slrd_q;
-    reg [1:0]  fifoadr_q;
-    (* IOB = "TRUE" *) reg        gpif_sloe_pin;
-    (* IOB = "TRUE" *) reg        gpif_slrd_pin;
-    (* IOB = "TRUE" *) reg [1:0]  gpif_fifoadr_pin;
-    (* IOB = "TRUE" *) reg [31:0] gpif_t = 32'hFFFF_FFFF;   // OBUFT T per data pin, 1 = high-Z
+    reg        sloe_q = 1'b1, slrd_q = 1'b1;
+    reg [1:0]  fifoadr_q = 2'b0;
+    (* IOB = "TRUE" *) reg        gpif_sloe_pin = 1'b1;
+    (* IOB = "TRUE" *) reg        gpif_slrd_pin = 1'b1;
+    (* IOB = "TRUE" *) reg [1:0]  gpif_fifoadr_pin = 2'b0;
+    (* IOB = "TRUE" *) reg [31:0] gpif_t = 32'h0;           // OBUFT T per data pin, 1 = high-Z
     assign sloe    = gpif_sloe_pin;
     assign slrd    = gpif_slrd_pin;
     assign fifoadr = gpif_fifoadr_pin;
