@@ -4,8 +4,18 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
 
-module b205_ref_pll(
+module b205_ref_pll #(
+    // PFD rates and lock tolerance are parameters only so a testbench can run the loop at a scaled PFD rate
+    // (sim/refpll_holdover). The defaults are the hardware values.
+    parameter PFD_FREQ_PPS=1,
+    parameter PFD_FREQ_10MHZ=10,
+    parameter LOCK_TOLERANCE_PPM=1,
+    // 1: on a reference loss or reset, restart from the last locked DAC word (holdover).
+    // 0: restart from dac_def, as up to build 16.8.
+    parameter HOLDOVER=1
+)(
     input reset,
+    input por,      // power-on reset: forgets the holdover word (reset alone keeps it)
     input clk,      // 200 MHz sample clock
     input refclk,   // 40 MHz reference clock
     input ref,      // PPS or 10 MHz external reference
@@ -29,11 +39,8 @@ module b205_ref_pll(
     localparam REF_FREQ_PPS=1;
     localparam REF_FREQ_10MHZ=10_000_000;
     localparam REF_CLK_FREQ=40_000_000;
-    localparam PFD_FREQ_PPS=1;
-    localparam PFD_FREQ_10MHZ=10;
 
     // Lock detection parameters
-    localparam LOCK_TOLERANCE_PPM=1;
     localparam LOCK_MARGIN_PPS=(SAMPLE_CLOCK_FREQ/PFD_FREQ_PPS)*LOCK_TOLERANCE_PPM/1_000_000;
     localparam LOCK_MARGIN_10MHZ=(SAMPLE_CLOCK_FREQ/PFD_FREQ_10MHZ)*LOCK_TOLERANCE_PPM/1_000_000;
 
@@ -103,6 +110,9 @@ module b205_ref_pll(
     (* max_fanout = 50 *) reg ref_is_10M;
     reg ref_is_pps;
     wire valid_ref = ref_is_10M | ref_is_pps;
+    // period of the reference edge being sampled now is a valid 10 MHz / PPS period
+    wire period_is_10M = (refcnt >= REF_PERIOD_10MHZ_MIN) && (refcnt <= REF_PERIOD_10MHZ_MAX);
+    wire period_is_pps = (refcnt >= REF_PERIOD_PPS_MIN) && (refcnt <= REF_PERIOD_PPS_MAX);
     always @(posedge clk) begin
         if (reset) begin
             refcnt <= 28'd0;
@@ -113,8 +123,8 @@ module b205_ref_pll(
         else if (ref_rising) begin
             refcnt <= 28'd1;
             ref_detected <= 1'b1;
-            ref_is_10M <= ((refcnt >= REF_PERIOD_10MHZ_MIN) && (refcnt <= REF_PERIOD_10MHZ_MAX));
-            ref_is_pps <= ((refcnt >= REF_PERIOD_PPS_MIN) && (refcnt <= REF_PERIOD_PPS_MAX));
+            ref_is_10M <= period_is_10M;
+            ref_is_pps <= period_is_pps;
         end
         else if ((ref_is_10M && (refcnt > REF_PERIOD_10MHZ_MAX)) || (refcnt > REF_PERIOD_PPS_MAX)) begin
             // consider the reference lost
@@ -137,7 +147,12 @@ module b205_ref_pll(
     // R divider
     wire [23:0] rdiv = ref_is_10M ? RDIV_10MHZ : RDIV_PPS;
     reg [23:0] rcnt;
-    wire [23:0] next_rcnt = ~valid_ref ? 24'd0 : (rcnt == rdiv) ? 24'd1 : rcnt + 1'b1;
+    // The edge that makes the reference valid counts as the first R edge (16.9). Up to 16.8 counting started
+    // one edge later, while the frequency counter starts with valid_ref: the first freq_err after every reset
+    // or reference loss was one reference period off (-20 counts at 10 MHz, a wide-band kick of hundreds of
+    // DAC steps), and N led R by 10..20 counts. Now freq_err is right from the first period and R leads N by
+    // 1..10 counts (N starts on the first refclk_div edge after valid_ref).
+    wire [23:0] next_rcnt = ~valid_ref ? {23'd0, period_is_10M | period_is_pps} : (rcnt == rdiv) ? 24'd1 : rcnt + 1'b1;
     reg r_rising;
     always @(posedge clk) begin
         if (ref_rising)
@@ -248,10 +263,46 @@ module b205_ref_pll(
     reg [8:0] lock_counter;
     reg ld;
     reg ld2x;
+
+    // Holdover. A UHD session open resets this module (FX3 global reset -> main MMCM -> clocks_ready ->
+    // reset), and so does a reference loss (~valid_ref). Up to 16.8 both restarted the loop from dac_def in
+    // wide-band acquisition: about +-40 ppb of swing and 9 s to lock. Now the loop keeps the last DAC word it
+    // had while fully locked (hold_sum, not cleared by reset) and restarts from it with narrow-band gain
+    // (nb_restart). An instant loss of lock (ld2x) still switches to wide-band. por or a new dac_def (user
+    // reg 2) forgets the word, and so the next restart uses dac_def as before.
+    localparam HOLD_RANGE = 16'h2000;   // a held word further than this from dac_def (about 2 ppm) is not used
+    reg signed [ACC_BITS-1:0] hold_sum = 'sd0;
+    reg hold_valid = 1'b0;
+    reg [DAC_IN_BITS-1:0] dac_def_prev = 16'h0000;
+    reg signed [DAC_IN_BITS:0] hold_dist = 'sd0;
+    reg hold_near = 1'b0;
+    reg restart_held = 1'b0;
+    reg signed [ACC_BITS-1:0] restart_sum = 32767 << SUM_EXTRA_BITS;   // same power-up value as sum
+    reg restart_nb = 1'b0;                                              // restart_sum is the held word
+    reg nb_restart = 1'b0;
+    wire [DAC_IN_BITS-1:0] hold_word = hold_sum[DAC_IN_BITS+SUM_EXTRA_BITS-1:SUM_EXTRA_BITS];
+    always @(posedge clk) begin
+        dac_def_prev <= dac_def;
+        if (por || (dac_def != dac_def_prev))
+            hold_valid <= 1'b0;
+        else if (state == MEASURE && r_rising && locked && lock_counter == LOCK_REACHED && !reset && valid_ref) begin
+            // sum is clipped here (APPLY_OUTPUT_VALUE ran before MEASURE)
+            hold_sum <= sum;
+            hold_valid <= 1'b1;
+        end
+        // Restart value, registered so the reset branch below keeps a plain register on sum's input.
+        hold_dist <= $signed({1'b0, hold_word}) - $signed({1'b0, dac_def});
+        hold_near <= (hold_dist < $signed({1'b0, HOLD_RANGE})) && (hold_dist > -$signed({1'b0, HOLD_RANGE}));
+        restart_held <= (HOLDOVER != 0) && hold_valid && hold_near && !por && (dac_def == dac_def_prev);
+        restart_sum <= restart_held ? hold_sum : (dac_def <<< SUM_EXTRA_BITS);
+        restart_nb <= restart_held;
+    end
+
     always @(posedge clk) begin
         if (reset || ~valid_ref) begin
             state <= MEASURE;
-            sum <= dac_def<<<SUM_EXTRA_BITS;
+            sum <= restart_sum;
+            nb_restart <= restart_nb;
             err <= 'sd0;
             freq_err_shifted <= 'sd0;
             shift <= 'sd0;
@@ -314,14 +365,18 @@ module b205_ref_pll(
                     adj_no_lock_10M <= err <<< (shift + SUM_EXTRA_BITS);
                     adj_lock_10M <= scale_down?((freq_err_shifted + phase_err)>>>1):(freq_err_shifted + phase_err);
                     adj_1pps <=  (adj_buff - err) <<< SUM_EXTRA_BITS; //adj <=  (err <<< 4) - err;
-                    if(ld2x) // Instant loss of lock
+                    if(ld2x) begin // Instant loss of lock
                         lock_counter <= 0;
+                        nb_restart <= 1'b0;
+                    end
+                    else if (lock_counter == LOCK_REACHED)
+                        nb_restart <= 1'b0;
 
                     state <= CALCULATE_ADJUSTMENT1;
                 end
                 CALCULATE_ADJUSTMENT1: begin
                     if (ref_is_10M)
-                        adj <= (lock_counter == LOCK_REACHED ) ? adj_lock_10M : adj_no_lock_10M;
+                        adj <= (lock_counter == LOCK_REACHED || nb_restart) ? adj_lock_10M : adj_no_lock_10M;
                     else
                         adj <=  adj_1pps;
                     state <= CALCULATE_OUTPUT_VALUE;
@@ -405,12 +460,14 @@ module b205_ref_pll(
 
     // dac_now (really freq_err) and phase_err_now stay 0 while no reference is detected: freq_err is held in
     // reset and phase_err is only captured when R edges arrive. So they can't show whether the readback path
-    // works. This word can: with no reference, daco equals dac_def.
+    // works. This word can: with no reference, daco equals dac_def (or the held word when hold_valid).
     //   [15:0] daco (loop DAC word)   [31:16] dac_out (word sent to the 12-bit DAC, in [15:4])
     //   [40:32] lock_counter          [48] locked  [49] ref_is_10M  [50] ref_is_pps  [51] ref_detected
-    //   [52] force_fine               [63:56] 8'hB2 layout tag
+    //   [52] force_fine               [53] hold_valid (a locked word is held)
+    //   [54] nb_restart (loop restarted from the held word, narrow-band until locked or ld2x)
+    //   [63:56] 8'hB2 layout tag
     // Fields change at most once per PFD period (0.1 s at 10 MHz, 1 s at PPS), so the plain multi-bit
     // synchronizer at the reader tears only if a read lands within a few ns of an update.
-    assign status = {8'hB2, 3'd0, force_fine, ref_detected, ref_is_pps, ref_is_10M, locked,
+    assign status = {8'hB2, 1'b0, nb_restart, hold_valid, force_fine, ref_detected, ref_is_pps, ref_is_10M, locked,
                      7'd0, lock_counter, dac_out, daco};
 endmodule

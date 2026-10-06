@@ -91,7 +91,7 @@ module b200_core
     localparam COMPAT_MAJOR      = 16'h0010;
     // Minor 1 = vladisslav2011 16.1 (RTL audit fixes). From 2 on, LibreSDRB220 phase1 builds: bump on every
     // build so `uhd_usrp_probe` ("FPGA Version: 16.N") names the image. UHD checks only COMPAT_MAJOR.
-    localparam COMPAT_MINOR      = 16'h0008;
+    localparam COMPAT_MINOR      = 16'h0009;
 
     (* ASYNC_REG = "TRUE" *) reg [1:0] lock_state;
     (* ASYNC_REG = "TRUE" *) reg [1:0] lock_state_r;

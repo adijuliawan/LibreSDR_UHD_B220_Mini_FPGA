@@ -195,6 +195,12 @@ module libresdr_b210 (
     reset_sync ref_pll_sync(.clk(ref_pll_clk), .reset_in(!clocks_ready), .reset_out(ref_pll_rst));
     reset_sync gpif_sync(.clk(gpif_clk), .reset_in(!clocks_ready), .reset_out(gpif_rst));
 
+    // Power-on reset for the reference loop: high from configuration until ref_pll_rst is first released,
+    // then never again. ref_pll_rst also follows every UHD session open (FX3 global reset -> MMCM reset ->
+    // clocks_ready), and b205_ref_pll keeps its holdover word across those; only ref_pll_por forgets it.
+    reg ref_pll_por = 1'b1;
+    always @(posedge ref_pll_clk) if (!ref_pll_rst) ref_pll_por <= 1'b0;
+
     wire ref_sel;
     wire ext_ref;
     wire ext_ref_locked;
@@ -365,6 +371,7 @@ end
 
 b205_ref_pll ref_pll_libresdr(
     .reset  (ref_pll_rst),
+    .por    (ref_pll_por),
     .clk    (ref_pll_clk),      // 200 MHz sample clock
     .refclk (int_40mhz),   // 40 MHz reference clock
     .ref    (ext_ref),      // PPS or 10 MHz external reference
